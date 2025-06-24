@@ -155,20 +155,16 @@ app.post("/chat", async (req, res) => {
 app.post("/schedule", async (req, res) => {
   const { name, dateTime, reason } = req.body;
 
-  if (!name || !dateTime || !reason) {
-    return res.status(400).json({ error: "Missing appointment fields" });
+  if (!global.oAuthToken) {
+    return res
+      .status(401)
+      .json({ error: "Google Calendar is not authenticated yet." });
   }
 
   try {
-    const auth = new google.auth.GoogleAuth({
-      keyFile: path.join(__dirname, "google-credentials.json"),
-      scopes: ["https://www.googleapis.com/auth/calendar"],
-    });
+    oAuth2Client.setCredentials(global.oAuthToken);
 
-    const calendar = google.calendar({
-      version: "v3",
-      auth: await auth.getClient(),
-    });
+    const calendar = google.calendar({ version: "v3", auth: oAuth2Client });
 
     const event = {
       summary: `Appointment with ${name}`,
@@ -193,7 +189,9 @@ app.post("/schedule", async (req, res) => {
     res.json({ success: true, eventLink: response.data.htmlLink });
   } catch (err) {
     console.error("Google Calendar error:", err);
-    res.status(500).json({ error: "Failed to schedule appointment" });
+    res
+      .status(500)
+      .json({ error: "Failed to schedule appointment", details: err.message });
   }
 });
 
