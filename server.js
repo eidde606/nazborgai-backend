@@ -4,6 +4,9 @@ const sqlite3 = require("sqlite3").verbose();
 const dotenv = require("dotenv");
 const cors = require("cors");
 const OpenAI = require("openai");
+const { google } = require("googleapis");
+const fs = require("fs");
+const path = require("path");
 
 // Load .env
 dotenv.config();
@@ -114,6 +117,52 @@ app.post("/chat", async (req, res) => {
       res.status(500).json({ error: "Something went wrong." });
     }
   });
+});
+
+// Schedule appointment endpoint
+app.post("/schedule", async (req, res) => {
+  const { name, dateTime, reason } = req.body;
+
+  if (!name || !dateTime || !reason) {
+    return res.status(400).json({ error: "Missing appointment fields" });
+  }
+
+  try {
+    const auth = new google.auth.GoogleAuth({
+      keyFile: path.join(__dirname, "google-credentials.json"),
+      scopes: ["https://www.googleapis.com/auth/calendar"],
+    });
+
+    const calendar = google.calendar({
+      version: "v3",
+      auth: await auth.getClient(),
+    });
+
+    const event = {
+      summary: `Appointment with ${name}`,
+      description: reason,
+      start: {
+        dateTime: new Date(dateTime).toISOString(),
+        timeZone: "America/New_York",
+      },
+      end: {
+        dateTime: new Date(
+          new Date(dateTime).getTime() + 30 * 60000
+        ).toISOString(),
+        timeZone: "America/New_York",
+      },
+    };
+
+    const response = await calendar.events.insert({
+      calendarId: "primary",
+      resource: event,
+    });
+
+    res.json({ success: true, eventLink: response.data.htmlLink });
+  } catch (err) {
+    console.error("Google Calendar error:", err);
+    res.status(500).json({ error: "Failed to schedule appointment" });
+  }
 });
 
 // Start server
