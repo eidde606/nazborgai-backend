@@ -26,7 +26,6 @@ db.run(
   "CREATE TABLE IF NOT EXISTS conversations (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT, content TEXT)"
 );
 
-// Save message to DB
 function saveMessage(role, content) {
   db.run("INSERT INTO conversations (role, content) VALUES (?, ?)", [
     role,
@@ -34,7 +33,6 @@ function saveMessage(role, content) {
   ]);
 }
 
-// Google Auth setup
 const oAuth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
@@ -62,7 +60,6 @@ app.get("/auth/google/callback", async (req, res) => {
   }
 });
 
-// Load messages from DB
 function loadMessages(callback) {
   db.all("SELECT role, content FROM conversations", (err, rows) => {
     if (err) {
@@ -74,33 +71,21 @@ function loadMessages(callback) {
   });
 }
 
-// System prompt definition
 const systemPrompt = {
   role: "system",
-  content: `
-You are NazborgAI — a smart, custom-built AI chatbot created by Eddie Nazario.
-
+  content:
+    `You are NazborgAI — a smart, custom-built AI chatbot created by Eddie Nazario.
 You live inside Eddie's personal web portfolio (nazariodev.com) and are powered by a backend server built with Node.js, Express, and OpenAI's API. You store conversations in a local SQLite database to remember past interactions and provide context.
-
 Your job is to answer questions about Eddie using only the facts below. Be helpful, friendly, and professional.
-
-✅ If asked in Spanish, respond in Spanish.  
-✅ If asked in English, respond in English.  
-⛔ Do NOT make anything up. If unsure, say: "I don’t have that information."  
+✅ If asked in Spanish, respond in Spanish.
+✅ If asked in English, respond in English.
+⛔ Do NOT make anything up. If unsure, say: "I don’t have that information."
 ✨ If someone asks about you, explain you were created by Eddie Nazario as part of his React developer portfolio.
-
-Eddie Nazario’s Info:
-- Name: Eddie Nazario
-- Location: Hopewell, VA
-- Email: eiddenazario@gmail.com
-- Skills: ReactJS, JavaScript, Firebase, CSS, HTML5, Bootstrap, ChakraUI, GitHub
-- Projects: nazariodev.com, myReads book tracker
-- Experience: Junior React Dev @ Vet Tech IT Services, Freelance app dev
-- Education: AAS in Software Dev, John Tyler CC
-`.trim(),
+Also, if the user asks to schedule something, gather their name, date/time, and reason for the appointment, then return a JSON block like:
+{"action": "schedule", "name": "John", "dateTime": "next Friday at 2pm", "reason": "Learn React"}`.trim(),
 };
 
-// Chat endpoint
+// Chat endpoint with scheduling detection
 app.post("/chat", async (req, res) => {
   const userMessage = req.body.prompt;
   if (!userMessage || typeof userMessage !== "string" || !userMessage.trim()) {
@@ -112,21 +97,72 @@ app.post("/chat", async (req, res) => {
       systemPrompt,
       ...history,
       { role: "user", content: userMessage },
-    ].filter(
+    ];
+    const sanitizedMessages = fullMessages.filter(
       (msg) =>
-        msg?.role && typeof msg.content === "string" && msg.content.trim()
+        msg?.role &&
+        typeof msg.content === "string" &&
+        msg.content.trim() !== ""
     );
 
     try {
       const completion = await openai.chat.completions.create({
         model: "gpt-3.5-turbo",
-        messages: fullMessages,
+        messages: sanitizedMessages,
       });
 
-      const reply = completion.choices[0]?.message?.content?.trim();
-      if (reply) {
+      const reply = completion.choices[0].message.content;
+      if (reply?.trim()) {
         saveMessage("user", userMessage);
         saveMessage("assistant", reply);
+
+        // Check for JSON block in reply
+        const match = reply.match(/\{\s*"action"\s*:\s*"schedule".*\}/s);
+        if (match) {
+          try {
+            const json = JSON.parse(match[0]);
+            if (
+              json.action === "schedule" &&
+              json.name &&
+              json.dateTime &&
+              json.reason &&
+              global.oAuthToken
+            ) {
+              const parsedDate = chrono.parseDate(json.dateTime);
+              if (parsedDate) {
+                oAuth2Client.setCredentials(global.oAuthToken);
+                const calendar = google.calendar({
+                  version: "v3",
+                  auth: oAuth2Client,
+                });
+                const event = {
+                  summary: `Appointment with ${json.name}`,
+                  description: json.reason,
+                  start: {
+                    dateTime: parsedDate.toISOString(),
+                    timeZone: "America/New_York",
+                  },
+                  end: {
+                    dateTime: new Date(
+                      parsedDate.getTime() + 30 * 60000
+                    ).toISOString(),
+                    timeZone: "America/New_York",
+                  },
+                };
+                const result = await calendar.events.insert({
+                  calendarId: "primary",
+                  resource: event,
+                });
+                return res.json({
+                  reply: `${reply}\n\n✅ Appointment scheduled: ${result.data.htmlLink}`,
+                });
+              }
+            }
+          } catch (e) {
+            console.error("Failed to parse or schedule:", e);
+          }
+        }
+
         res.json({ reply });
       } else {
         res.json({ reply: "🤖 No response from NazborgAI." });
@@ -138,25 +174,22 @@ app.post("/chat", async (req, res) => {
   });
 });
 
-// Appointment scheduler
+// Schedule endpoint (still exposed)
 app.post("/schedule", async (req, res) => {
   const { name, dateTime, reason } = req.body;
-
   if (!global.oAuthToken) {
     return res
       .status(401)
       .json({ error: "Google Calendar is not authenticated yet." });
   }
-
   const parsedDate = chrono.parseDate(dateTime);
-  if (!parsedDate || isNaN(parsedDate.getTime())) {
+  if (!parsedDate) {
     return res.status(400).json({ error: "Invalid date/time format." });
   }
 
   try {
     oAuth2Client.setCredentials(global.oAuthToken);
     const calendar = google.calendar({ version: "v3", auth: oAuth2Client });
-
     const event = {
       summary: `Appointment with ${name}`,
       description: reason,
@@ -169,23 +202,20 @@ app.post("/schedule", async (req, res) => {
         timeZone: "America/New_York",
       },
     };
-
     const response = await calendar.events.insert({
       calendarId: "primary",
       resource: event,
     });
-
     res.json({ success: true, eventLink: response.data.htmlLink });
   } catch (err) {
     console.error("Google Calendar error:", err);
-    res.status(500).json({
-      error: "Failed to schedule appointment",
-      details: err.message,
-    });
+    res
+      .status(500)
+      .json({ error: "Failed to schedule appointment", details: err.message });
   }
 });
 
-// Start the server
+// Start server
 app.listen(3001, () => {
   console.log("✅ NazborgAI backend running on http://localhost:3001");
 });
