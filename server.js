@@ -7,6 +7,7 @@ const OpenAI = require("openai");
 const { google } = require("googleapis");
 const fs = require("fs");
 const path = require("path");
+const chrono = require("chrono-node"); // ✅ NEW
 
 // Load .env
 dotenv.config();
@@ -27,7 +28,6 @@ db.run(
   "CREATE TABLE IF NOT EXISTS conversations (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT, content TEXT)"
 );
 
-// Save message to DB
 function saveMessage(role, content) {
   db.run("INSERT INTO conversations (role, content) VALUES (?, ?)", [
     role,
@@ -55,19 +55,14 @@ app.get("/auth/google/callback", async (req, res) => {
   try {
     const { tokens } = await oAuth2Client.getToken(code);
     oAuth2Client.setCredentials(tokens);
-
     global.oAuthToken = tokens;
-
-    res.send(
-      "✅ Successfully authenticated with Google Calendar! You can now schedule appointments."
-    );
+    res.send("✅ Successfully authenticated with Google Calendar!");
   } catch (error) {
     console.error("Google auth error:", error);
     res.status(500).send("❌ Failed to authenticate with Google Calendar.");
   }
 });
 
-// Load message history
 function loadMessages(callback) {
   db.all("SELECT role, content FROM conversations", (err, rows) => {
     if (err) {
@@ -79,30 +74,11 @@ function loadMessages(callback) {
   });
 }
 
-// System Prompt
 const systemPrompt = {
   role: "system",
-  content: `
-You are NazborgAI — a smart, custom-built AI chatbot created by Eddie Nazario.
-
-You live inside Eddie's personal web portfolio (nazariodev.com) and are powered by a backend server built with Node.js, Express, and OpenAI's API. You store conversations in a local SQLite database to remember past interactions and provide context.
-
-Your job is to answer questions about Eddie using only the facts below. Be helpful, friendly, and professional.
-
-✅ If asked in Spanish, respond in Spanish.  
-✅ If asked in English, respond in English.  
-⛔ Do NOT make anything up. If unsure, say: "I don’t have that information."  
-✨ If someone asks about you, explain you were created by Eddie Nazario as part of his React developer portfolio.
-
-Eddie Nazario’s Info:
-- Name: Eddie Nazario
-- Location: Hopewell, VA
-- Email: eiddenazario@gmail.com
-- Skills: ReactJS, JavaScript, Firebase, CSS, HTML5, Bootstrap, ChakraUI, GitHub
-- Projects: nazariodev.com, myReads book tracker
-- Experience: Junior React Dev @ Vet Tech IT Services, Freelance app dev
-- Education: AAS in Software Dev, John Tyler CC
-`.trim(),
+  content:
+    `You are NazborgAI — a smart, custom-built AI chatbot created by Eddie Nazario.
+...`.trim(),
 };
 
 // Chat endpoint
@@ -127,8 +103,6 @@ app.post("/chat", async (req, res) => {
         msg.content.trim() !== ""
     );
 
-    console.log("🔍 Sending to OpenAI:", sanitizedMessages);
-
     try {
       const completion = await openai.chat.completions.create({
         model: "gpt-3.5-turbo",
@@ -151,7 +125,7 @@ app.post("/chat", async (req, res) => {
   });
 });
 
-// Schedule appointment endpoint
+// ✅ Updated Schedule Endpoint with chrono-node parsing
 app.post("/schedule", async (req, res) => {
   const { name, dateTime, reason } = req.body;
 
@@ -161,22 +135,25 @@ app.post("/schedule", async (req, res) => {
       .json({ error: "Google Calendar is not authenticated yet." });
   }
 
+  // ✅ Parse human-friendly datetime
+  const parsedDate = chrono.parseDate(dateTime);
+  if (!parsedDate) {
+    return res.status(400).json({ error: "Invalid date/time format." });
+  }
+
   try {
     oAuth2Client.setCredentials(global.oAuthToken);
-
     const calendar = google.calendar({ version: "v3", auth: oAuth2Client });
 
     const event = {
       summary: `Appointment with ${name}`,
       description: reason,
       start: {
-        dateTime: new Date(dateTime).toISOString(),
+        dateTime: parsedDate.toISOString(), // ✅ parsed to ISO
         timeZone: "America/New_York",
       },
       end: {
-        dateTime: new Date(
-          new Date(dateTime).getTime() + 30 * 60000
-        ).toISOString(),
+        dateTime: new Date(parsedDate.getTime() + 30 * 60000).toISOString(),
         timeZone: "America/New_York",
       },
     };
