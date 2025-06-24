@@ -35,6 +35,38 @@ function saveMessage(role, content) {
   ]);
 }
 
+const oAuth2Client = new google.auth.OAuth2(
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.GOOGLE_CLIENT_SECRET,
+  process.env.GOOGLE_REDIRECT_URI
+);
+
+app.get("/auth/google", (req, res) => {
+  const authUrl = oAuth2Client.generateAuthUrl({
+    access_type: "offline",
+    scope: ["https://www.googleapis.com/auth/calendar"],
+  });
+  res.redirect(authUrl);
+});
+
+app.get("/auth/google/callback", async (req, res) => {
+  const { code } = req.query.code;
+
+  try {
+    const { tokens } = await oAuth2Client.getToken(code);
+    oAuth2Client.setCredentials(tokens);
+
+    global.oAuthToken = tokens;
+
+    res.send(
+      "✅ Successfully authenticated with Google Calendar! You can now schedule appointments."
+    );
+  } catch (error) {
+    console.error("Google auth error:", error);
+    res.status(500).send("❌ Failed to authenticate with Google Calendar.");
+  }
+});
+
 // Load message history
 function loadMessages(callback) {
   db.all("SELECT role, content FROM conversations", (err, rows) => {
