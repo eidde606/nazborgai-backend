@@ -50,7 +50,7 @@ app.get("/auth/google", (req, res) => {
 });
 
 app.get("/auth/google/callback", async (req, res) => {
-  const { code } = req.query.code;
+  const code = req.query.code;
 
   try {
     const { tokens } = await oAuth2Client.getToken(code);
