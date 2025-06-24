@@ -7,15 +7,13 @@ const OpenAI = require("openai");
 const { google } = require("googleapis");
 const fs = require("fs");
 const path = require("path");
-const chrono = require("chrono-node"); // ✅ NEW
+const chrono = require("chrono-node");
 
 // Load .env
 dotenv.config();
 
 // Init OpenAI
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // Init Express
 const app = express();
@@ -28,6 +26,7 @@ db.run(
   "CREATE TABLE IF NOT EXISTS conversations (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT, content TEXT)"
 );
 
+// Save message to DB
 function saveMessage(role, content) {
   db.run("INSERT INTO conversations (role, content) VALUES (?, ?)", [
     role,
@@ -35,6 +34,7 @@ function saveMessage(role, content) {
   ]);
 }
 
+// Google Auth setup
 const oAuth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
@@ -51,7 +51,6 @@ app.get("/auth/google", (req, res) => {
 
 app.get("/auth/google/callback", async (req, res) => {
   const code = req.query.code;
-
   try {
     const { tokens } = await oAuth2Client.getToken(code);
     oAuth2Client.setCredentials(tokens);
@@ -63,6 +62,7 @@ app.get("/auth/google/callback", async (req, res) => {
   }
 });
 
+// Load messages from DB
 function loadMessages(callback) {
   db.all("SELECT role, content FROM conversations", (err, rows) => {
     if (err) {
@@ -74,17 +74,35 @@ function loadMessages(callback) {
   });
 }
 
+// System prompt definition
 const systemPrompt = {
   role: "system",
-  content:
-    `You are NazborgAI — a smart, custom-built AI chatbot created by Eddie Nazario.
-...`.trim(),
+  content: `
+You are NazborgAI — a smart, custom-built AI chatbot created by Eddie Nazario.
+
+You live inside Eddie's personal web portfolio (nazariodev.com) and are powered by a backend server built with Node.js, Express, and OpenAI's API. You store conversations in a local SQLite database to remember past interactions and provide context.
+
+Your job is to answer questions about Eddie using only the facts below. Be helpful, friendly, and professional.
+
+✅ If asked in Spanish, respond in Spanish.  
+✅ If asked in English, respond in English.  
+⛔ Do NOT make anything up. If unsure, say: "I don’t have that information."  
+✨ If someone asks about you, explain you were created by Eddie Nazario as part of his React developer portfolio.
+
+Eddie Nazario’s Info:
+- Name: Eddie Nazario
+- Location: Hopewell, VA
+- Email: eiddenazario@gmail.com
+- Skills: ReactJS, JavaScript, Firebase, CSS, HTML5, Bootstrap, ChakraUI, GitHub
+- Projects: nazariodev.com, myReads book tracker
+- Experience: Junior React Dev @ Vet Tech IT Services, Freelance app dev
+- Education: AAS in Software Dev, John Tyler CC
+`.trim(),
 };
 
 // Chat endpoint
 app.post("/chat", async (req, res) => {
   const userMessage = req.body.prompt;
-
   if (!userMessage || typeof userMessage !== "string" || !userMessage.trim()) {
     return res.status(400).json({ error: "Invalid prompt" });
   }
@@ -94,24 +112,19 @@ app.post("/chat", async (req, res) => {
       systemPrompt,
       ...history,
       { role: "user", content: userMessage },
-    ];
-
-    const sanitizedMessages = fullMessages.filter(
+    ].filter(
       (msg) =>
-        msg?.role &&
-        typeof msg.content === "string" &&
-        msg.content.trim() !== ""
+        msg?.role && typeof msg.content === "string" && msg.content.trim()
     );
 
     try {
       const completion = await openai.chat.completions.create({
         model: "gpt-3.5-turbo",
-        messages: sanitizedMessages,
+        messages: fullMessages,
       });
 
-      const reply = completion.choices[0].message.content;
-
-      if (reply?.trim()) {
+      const reply = completion.choices[0]?.message?.content?.trim();
+      if (reply) {
         saveMessage("user", userMessage);
         saveMessage("assistant", reply);
         res.json({ reply });
@@ -125,7 +138,7 @@ app.post("/chat", async (req, res) => {
   });
 });
 
-// ✅ Updated Schedule Endpoint with chrono-node parsing
+// Appointment scheduler
 app.post("/schedule", async (req, res) => {
   const { name, dateTime, reason } = req.body;
 
@@ -135,9 +148,8 @@ app.post("/schedule", async (req, res) => {
       .json({ error: "Google Calendar is not authenticated yet." });
   }
 
-  // ✅ Parse human-friendly datetime
   const parsedDate = chrono.parseDate(dateTime);
-  if (!parsedDate) {
+  if (!parsedDate || isNaN(parsedDate.getTime())) {
     return res.status(400).json({ error: "Invalid date/time format." });
   }
 
@@ -149,7 +161,7 @@ app.post("/schedule", async (req, res) => {
       summary: `Appointment with ${name}`,
       description: reason,
       start: {
-        dateTime: parsedDate.toISOString(), // ✅ parsed to ISO
+        dateTime: parsedDate.toISOString(),
         timeZone: "America/New_York",
       },
       end: {
@@ -166,13 +178,14 @@ app.post("/schedule", async (req, res) => {
     res.json({ success: true, eventLink: response.data.htmlLink });
   } catch (err) {
     console.error("Google Calendar error:", err);
-    res
-      .status(500)
-      .json({ error: "Failed to schedule appointment", details: err.message });
+    res.status(500).json({
+      error: "Failed to schedule appointment",
+      details: err.message,
+    });
   }
 });
 
-// Start server
+// Start the server
 app.listen(3001, () => {
   console.log("✅ NazborgAI backend running on http://localhost:3001");
 });
