@@ -7,18 +7,13 @@ const OpenAI = require("openai");
 const { google } = require("googleapis");
 const chrono = require("chrono-node");
 
-// Load environment variables
 dotenv.config();
-
-// Init OpenAI
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// Init Express
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
-// SQLite setup
 const db = new sqlite3.Database("./nazborg.db");
 db.run(
   "CREATE TABLE IF NOT EXISTS conversations (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT, content TEXT)"
@@ -37,11 +32,10 @@ const oAuth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_REDIRECT_URI
 );
 
-// Set credentials from Render environment
 if (process.env.REFRESH_TOKEN) {
   oAuth2Client.setCredentials({ refresh_token: process.env.REFRESH_TOKEN });
 } else {
-  console.warn("\u26A0\uFE0F No REFRESH_TOKEN found in environment.");
+  console.warn("⚠️ No REFRESH_TOKEN found in environment.");
 }
 
 app.get("/auth/google", (req, res) => {
@@ -59,14 +53,14 @@ app.get("/auth/google/callback", async (req, res) => {
 
   try {
     const { tokens } = await oAuth2Client.getToken(code);
-    console.log("\ud83d\udcc5 Tokens received:", tokens);
-    res.send("\u2705 Google auth successful. Add the refresh_token to Render.");
+    console.log("📥 Tokens received:", tokens);
+    res.send("✅ Google auth successful. Add the refresh_token to Render.");
   } catch (error) {
     console.error(
-      "\u274C Google auth error:",
+      "❌ Google auth error:",
       error.response?.data || error.message
     );
-    res.status(500).send("\u274C Failed to authenticate with Google Calendar.");
+    res.status(500).send("❌ Failed to authenticate with Google Calendar.");
   }
 });
 
@@ -86,23 +80,17 @@ const systemPrompt = {
   content: `
 You are NazborgAI — a smart, custom-built AI chatbot created by Eddie Nazario.
 You live inside Eddie's personal web portfolio (nazariodev.com) and are powered by a backend server built with Node.js, Express, and OpenAI's API. You store conversations in a local SQLite database to remember past interactions and provide context.
-
 Your job is to answer questions about Eddie using only the facts below. Be helpful, friendly, and professional.
-
 ✅ If asked in Spanish, respond in Spanish.
 ✅ If asked in English, respond in English.
 ⛔ Do NOT make anything up. If unsure, say: "I don’t have that information."
 ✨ If someone asks about you, explain you were created by Eddie Nazario as part of his React developer portfolio.
-
 If the user says anything that sounds like scheduling, booking, making an appointment, meeting, or follow-up, extract their name, intended date/time, and the reason. Then return a JSON block like this:
 {"action": "schedule", "name": "John", "dateTime": "next Friday at 2pm", "reason": "Learn React"}
-
 ✅ Be flexible with casual phrases like "Can I meet tomorrow?" or "Set something up for me."
-⛔ Do NOT generate a JSON unless all 3 parts (name, date/time, reason) are clear — otherwise, ask the user for what’s missing.
-  `.trim(),
+⛔ Do NOT generate a JSON unless all 3 parts (name, date/time, reason) are clear — otherwise, ask the user for what’s missing.`.trim(),
 };
 
-// Chat endpoint with scheduling detection
 app.post("/chat", async (req, res) => {
   const userMessage = req.body.prompt;
   if (!userMessage || typeof userMessage !== "string" || !userMessage.trim()) {
@@ -129,60 +117,76 @@ app.post("/chat", async (req, res) => {
       });
 
       const reply = completion.choices[0].message.content;
-      console.log("\ud83e\uddd0 AI raw reply:", reply);
+      console.log("🤔 AI raw reply:", reply);
 
-      if (reply?.trim()) {
-        saveMessage("user", userMessage);
-        saveMessage("assistant", reply);
+      saveMessage("user", userMessage);
+      saveMessage("assistant", reply);
 
-        const match = reply.match(/\{\s*"action"\s*:\s*"schedule".*\}/s);
-        if (match) {
-          try {
-            const json = JSON.parse(match[0]);
-            if (
-              json.action === "schedule" &&
-              json.name &&
-              json.dateTime &&
-              json.reason
-            ) {
-              const parsedDate = chrono.parseDate(json.dateTime);
-              if (parsedDate) {
-                const calendar = google.calendar({
-                  version: "v3",
-                  auth: oAuth2Client,
-                });
-                const event = {
-                  summary: `Appointment with ${json.name}`,
-                  description: json.reason,
-                  start: {
-                    dateTime: parsedDate.toISOString(),
-                    timeZone: "America/New_York",
-                  },
-                  end: {
-                    dateTime: new Date(
-                      parsedDate.getTime() + 30 * 60000
-                    ).toISOString(),
-                    timeZone: "America/New_York",
-                  },
-                };
-                const result = await calendar.events.insert({
-                  calendarId: "primary",
-                  resource: event,
-                });
-                return res.json({
-                  reply: `${reply}\n\n\u2705 Appointment scheduled: ${result.data.htmlLink}`,
-                });
-              }
-            }
-          } catch (e) {
-            console.error("Failed to parse or schedule:", e);
+      const match = reply.match(/\{\s*"action"\s*:\s*"schedule".*\}/s);
+      if (match) {
+        try {
+          const json = JSON.parse(match[0]);
+          const parsedDate = chrono.parseDate(json.dateTime);
+          if (json.name && parsedDate && json.reason) {
+            const calendar = google.calendar({
+              version: "v3",
+              auth: oAuth2Client,
+            });
+            const event = {
+              summary: `Appointment with ${json.name}`,
+              description: json.reason,
+              start: {
+                dateTime: parsedDate.toISOString(),
+                timeZone: "America/New_York",
+              },
+              end: {
+                dateTime: new Date(
+                  parsedDate.getTime() + 30 * 60000
+                ).toISOString(),
+                timeZone: "America/New_York",
+              },
+            };
+            const result = await calendar.events.insert({
+              calendarId: "primary",
+              resource: event,
+            });
+            return res.json({
+              reply: `${reply}\n\n✅ [View your event](${result.data.htmlLink})`,
+            });
           }
+        } catch (err) {
+          console.error("Failed to parse or schedule:", err);
         }
-
-        res.json({ reply });
-      } else {
-        res.json({ reply: "\ud83e\udd16 No response from NazborgAI." });
       }
+
+      // Fallback: try parsing user message for a date
+      const fallbackDate = chrono.parseDate(userMessage);
+      if (fallbackDate) {
+        const calendar = google.calendar({ version: "v3", auth: oAuth2Client });
+        const event = {
+          summary: `Appointment with user`,
+          description: userMessage,
+          start: {
+            dateTime: fallbackDate.toISOString(),
+            timeZone: "America/New_York",
+          },
+          end: {
+            dateTime: new Date(
+              fallbackDate.getTime() + 30 * 60000
+            ).toISOString(),
+            timeZone: "America/New_York",
+          },
+        };
+        const result = await calendar.events.insert({
+          calendarId: "primary",
+          resource: event,
+        });
+        return res.json({
+          reply: `${reply}\n\n✅ [Fallback event created](${result.data.htmlLink})`,
+        });
+      }
+
+      res.json({ reply });
     } catch (err) {
       console.error("OpenAI error:", err);
       res.status(500).json({ error: "Something went wrong." });
@@ -190,7 +194,6 @@ app.post("/chat", async (req, res) => {
   });
 });
 
-// Schedule endpoint
 app.post("/schedule", async (req, res) => {
   const { name, dateTime, reason } = req.body;
   if (!name || !dateTime || !reason) {
@@ -230,5 +233,5 @@ app.post("/schedule", async (req, res) => {
 });
 
 app.listen(3001, () => {
-  console.log("\u2705 NazborgAI backend running on http://localhost:3001");
+  console.log("✅ NazborgAI backend running on http://localhost:3001");
 });
