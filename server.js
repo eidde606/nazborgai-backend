@@ -5,21 +5,10 @@ const dotenv = require("dotenv");
 const cors = require("cors");
 const OpenAI = require("openai");
 const { google } = require("googleapis");
-const fs = require("fs");
-const path = require("path");
 const chrono = require("chrono-node");
 
-// Load .env
+// Load environment variables
 dotenv.config();
-
-// Load refresh token from file if exists
-let tokensFromFile;
-try {
-  tokensFromFile = JSON.parse(fs.readFileSync("./refresh_token.json"));
-  console.log("🔁 Loaded refresh token from file");
-} catch (err) {
-  console.warn("⚠️ No refresh token file found. You must authorize manually.");
-}
 
 // Init OpenAI
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -48,9 +37,11 @@ const oAuth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_REDIRECT_URI
 );
 
-if (tokensFromFile) {
-  oAuth2Client.setCredentials(tokensFromFile);
-  global.oAuthToken = tokensFromFile;
+// Set credentials from Render environment
+if (process.env.REFRESH_TOKEN) {
+  oAuth2Client.setCredentials({ refresh_token: process.env.REFRESH_TOKEN });
+} else {
+  console.warn("⚠️ No REFRESH_TOKEN found in environment.");
 }
 
 app.get("/auth/google", (req, res) => {
@@ -68,11 +59,8 @@ app.get("/auth/google/callback", async (req, res) => {
 
   try {
     const { tokens } = await oAuth2Client.getToken(code);
-    oAuth2Client.setCredentials(tokens);
-    global.oAuthToken = tokens;
-    fs.writeFileSync("./refresh_token.json", JSON.stringify(tokens, null, 2));
-    console.log("📥 Tokens saved:", tokens);
-    res.send("✅ Successfully authenticated and saved token!");
+    console.log("📥 Tokens received:", tokens);
+    res.send("✅ Google auth successful. Add the refresh_token to Render.");
   } catch (error) {
     console.error(
       "❌ Google auth error:",
@@ -95,8 +83,8 @@ function loadMessages(callback) {
 
 const systemPrompt = {
   role: "system",
-  content:
-    `You are NazborgAI — a smart, custom-built AI chatbot created by Eddie Nazario.
+  content: `
+You are NazborgAI — a smart, custom-built AI chatbot created by Eddie Nazario.
 You live inside Eddie's personal web portfolio (nazariodev.com) and are powered by a backend server built with Node.js, Express, and OpenAI's API. You store conversations in a local SQLite database to remember past interactions and provide context.
 Your job is to answer questions about Eddie using only the facts below. Be helpful, friendly, and professional.
 ✅ If asked in Spanish, respond in Spanish.
@@ -104,7 +92,8 @@ Your job is to answer questions about Eddie using only the facts below. Be helpf
 ⛔ Do NOT make anything up. If unsure, say: "I don’t have that information."
 ✨ If someone asks about you, explain you were created by Eddie Nazario as part of his React developer portfolio.
 Also, if the user asks to schedule something, gather their name, date/time, and reason for the appointment, then return a JSON block like:
-{"action": "schedule", "name": "John", "dateTime": "next Friday at 2pm", "reason": "Learn React"}`.trim(),
+{"action": "schedule", "name": "John", "dateTime": "next Friday at 2pm", "reason": "Learn React"}
+  `.trim(),
 };
 
 // Chat endpoint with scheduling detection
@@ -146,12 +135,10 @@ app.post("/chat", async (req, res) => {
               json.action === "schedule" &&
               json.name &&
               json.dateTime &&
-              json.reason &&
-              global.oAuthToken
+              json.reason
             ) {
               const parsedDate = chrono.parseDate(json.dateTime);
               if (parsedDate) {
-                oAuth2Client.setCredentials(global.oAuthToken);
                 const calendar = google.calendar({
                   version: "v3",
                   auth: oAuth2Client,
@@ -198,10 +185,8 @@ app.post("/chat", async (req, res) => {
 // Schedule endpoint
 app.post("/schedule", async (req, res) => {
   const { name, dateTime, reason } = req.body;
-  if (!global.oAuthToken) {
-    return res
-      .status(401)
-      .json({ error: "Google Calendar is not authenticated yet." });
+  if (!name || !dateTime || !reason) {
+    return res.status(400).json({ error: "Missing required fields." });
   }
 
   const parsedDate = chrono.parseDate(dateTime);
@@ -210,7 +195,6 @@ app.post("/schedule", async (req, res) => {
   }
 
   try {
-    oAuth2Client.setCredentials(global.oAuthToken);
     const calendar = google.calendar({ version: "v3", auth: oAuth2Client });
     const event = {
       summary: `Appointment with ${name}`,
