@@ -6,6 +6,7 @@ const cors = require("cors");
 const OpenAI = require("openai");
 const { google } = require("googleapis");
 const chrono = require("chrono-node");
+const nodemailer = require("nodemailer");
 
 dotenv.config();
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -36,6 +37,37 @@ if (process.env.REFRESH_TOKEN) {
   oAuth2Client.setCredentials({ refresh_token: process.env.REFRESH_TOKEN });
 } else {
   console.warn("⚠️ No REFRESH_TOKEN found in environment.");
+}
+
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.NOTIFY_EMAIL_FROM,
+    pass: process.env.NOTIFY_EMAIL_PASS,
+  },
+});
+
+function sendNotificationEmail({ name, dateTime, reason, link }) {
+  const mailOptions = {
+    from: process.env.NOTIFY_EMAIL_FROM,
+    to: process.env.NOTIFY_EMAIL_TO,
+    subject: `📅 New Appointment: ${name}`,
+    html: `
+      <h2>New Appointment Scheduled</h2>
+      <p><strong>Name:</strong> ${name}</p>
+      <p><strong>Reason:</strong> ${reason}</p>
+      <p><strong>Date/Time:</strong> ${dateTime}</p>
+      <p><a href="${link}" target="_blank">📅 View in Google Calendar</a></p>
+    `,
+  };
+
+  transporter.sendMail(mailOptions, (error, info) => {
+    if (error) {
+      console.error("Email failed:", error);
+    } else {
+      console.log("📧 Email sent:", info.response);
+    }
+  });
 }
 
 app.get("/auth/google", (req, res) => {
@@ -150,6 +182,14 @@ app.post("/chat", async (req, res) => {
               calendarId: "primary",
               resource: event,
             });
+
+            sendNotificationEmail({
+              name: json.name,
+              dateTime: json.dateTime,
+              reason: json.reason,
+              link: result.data.htmlLink,
+            });
+
             return res.json({
               reply: `${reply}\n\n✅ [View your event](${result.data.htmlLink})`,
             });
@@ -159,7 +199,6 @@ app.post("/chat", async (req, res) => {
         }
       }
 
-      // Fallback: try parsing user message for a date
       const fallbackDate = chrono.parseDate(userMessage);
       if (fallbackDate) {
         const calendar = google.calendar({ version: "v3", auth: oAuth2Client });
@@ -181,6 +220,14 @@ app.post("/chat", async (req, res) => {
           calendarId: "primary",
           resource: event,
         });
+
+        sendNotificationEmail({
+          name: "user",
+          dateTime: userMessage,
+          reason: userMessage,
+          link: result.data.htmlLink,
+        });
+
         return res.json({
           reply: `${reply}\n\n✅ [Click here to view appointment](${result.data.htmlLink})`,
         });
@@ -223,6 +270,14 @@ app.post("/schedule", async (req, res) => {
       calendarId: "primary",
       resource: event,
     });
+
+    sendNotificationEmail({
+      name,
+      dateTime,
+      reason,
+      link: response.data.htmlLink,
+    });
+
     res.json({ success: true, eventLink: response.data.htmlLink });
   } catch (err) {
     console.error("Google Calendar error:", err);
