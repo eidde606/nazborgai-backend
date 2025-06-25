@@ -12,6 +12,15 @@ const chrono = require("chrono-node");
 // Load .env
 dotenv.config();
 
+// Load refresh token from file if exists
+let tokensFromFile;
+try {
+  tokensFromFile = JSON.parse(fs.readFileSync("./refresh_token.json"));
+  console.log("🔁 Loaded refresh token from file");
+} catch (err) {
+  console.warn("⚠️ No refresh token file found. You must authorize manually.");
+}
+
 // Init OpenAI
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -39,9 +48,15 @@ const oAuth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_REDIRECT_URI
 );
 
+if (tokensFromFile) {
+  oAuth2Client.setCredentials(tokensFromFile);
+  global.oAuthToken = tokensFromFile;
+}
+
 app.get("/auth/google", (req, res) => {
   const authUrl = oAuth2Client.generateAuthUrl({
     access_type: "offline",
+    prompt: "consent",
     scope: ["https://www.googleapis.com/auth/calendar"],
   });
   res.redirect(authUrl);
@@ -49,13 +64,20 @@ app.get("/auth/google", (req, res) => {
 
 app.get("/auth/google/callback", async (req, res) => {
   const code = req.query.code;
+  if (!code) return res.status(400).send("Missing authorization code.");
+
   try {
     const { tokens } = await oAuth2Client.getToken(code);
     oAuth2Client.setCredentials(tokens);
     global.oAuthToken = tokens;
-    res.send("✅ Successfully authenticated with Google Calendar!");
+    fs.writeFileSync("./refresh_token.json", JSON.stringify(tokens, null, 2));
+    console.log("📥 Tokens saved:", tokens);
+    res.send("✅ Successfully authenticated and saved token!");
   } catch (error) {
-    console.error("Google auth error:", error);
+    console.error(
+      "❌ Google auth error:",
+      error.response?.data || error.message
+    );
     res.status(500).send("❌ Failed to authenticate with Google Calendar.");
   }
 });
@@ -116,7 +138,6 @@ app.post("/chat", async (req, res) => {
         saveMessage("user", userMessage);
         saveMessage("assistant", reply);
 
-        // Check for JSON block in reply
         const match = reply.match(/\{\s*"action"\s*:\s*"schedule".*\}/s);
         if (match) {
           try {
@@ -174,7 +195,7 @@ app.post("/chat", async (req, res) => {
   });
 });
 
-// Schedule endpoint (still exposed)
+// Schedule endpoint
 app.post("/schedule", async (req, res) => {
   const { name, dateTime, reason } = req.body;
   if (!global.oAuthToken) {
@@ -182,6 +203,7 @@ app.post("/schedule", async (req, res) => {
       .status(401)
       .json({ error: "Google Calendar is not authenticated yet." });
   }
+
   const parsedDate = chrono.parseDate(dateTime);
   if (!parsedDate) {
     return res.status(400).json({ error: "Invalid date/time format." });
@@ -215,7 +237,6 @@ app.post("/schedule", async (req, res) => {
   }
 });
 
-// Start server
 app.listen(3001, () => {
   console.log("✅ NazborgAI backend running on http://localhost:3001");
 });
