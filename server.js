@@ -41,7 +41,7 @@ const oAuth2Client = new google.auth.OAuth2(
 if (process.env.REFRESH_TOKEN) {
   oAuth2Client.setCredentials({ refresh_token: process.env.REFRESH_TOKEN });
 } else {
-  console.warn("⚠️ No REFRESH_TOKEN found in environment.");
+  console.warn("\u26A0\uFE0F No REFRESH_TOKEN found in environment.");
 }
 
 app.get("/auth/google", (req, res) => {
@@ -59,14 +59,14 @@ app.get("/auth/google/callback", async (req, res) => {
 
   try {
     const { tokens } = await oAuth2Client.getToken(code);
-    console.log("📥 Tokens received:", tokens);
-    res.send("✅ Google auth successful. Add the refresh_token to Render.");
+    console.log("\ud83d\udcc5 Tokens received:", tokens);
+    res.send("\u2705 Google auth successful. Add the refresh_token to Render.");
   } catch (error) {
     console.error(
-      "❌ Google auth error:",
+      "\u274C Google auth error:",
       error.response?.data || error.message
     );
-    res.status(500).send("❌ Failed to authenticate with Google Calendar.");
+    res.status(500).send("\u274C Failed to authenticate with Google Calendar.");
   }
 });
 
@@ -86,13 +86,19 @@ const systemPrompt = {
   content: `
 You are NazborgAI — a smart, custom-built AI chatbot created by Eddie Nazario.
 You live inside Eddie's personal web portfolio (nazariodev.com) and are powered by a backend server built with Node.js, Express, and OpenAI's API. You store conversations in a local SQLite database to remember past interactions and provide context.
+
 Your job is to answer questions about Eddie using only the facts below. Be helpful, friendly, and professional.
+
 ✅ If asked in Spanish, respond in Spanish.
 ✅ If asked in English, respond in English.
 ⛔ Do NOT make anything up. If unsure, say: "I don’t have that information."
 ✨ If someone asks about you, explain you were created by Eddie Nazario as part of his React developer portfolio.
-Also, if the user asks to schedule something, gather their name, date/time, and reason for the appointment, then return a JSON block like:
+
+If the user says anything that sounds like scheduling, booking, making an appointment, meeting, or follow-up, extract their name, intended date/time, and the reason. Then return a JSON block like this:
 {"action": "schedule", "name": "John", "dateTime": "next Friday at 2pm", "reason": "Learn React"}
+
+✅ Be flexible with casual phrases like "Can I meet tomorrow?" or "Set something up for me."
+⛔ Do NOT generate a JSON unless all 3 parts (name, date/time, reason) are clear — otherwise, ask the user for what’s missing.
   `.trim(),
 };
 
@@ -123,6 +129,8 @@ app.post("/chat", async (req, res) => {
       });
 
       const reply = completion.choices[0].message.content;
+      console.log("\ud83e\uddd0 AI raw reply:", reply);
+
       if (reply?.trim()) {
         saveMessage("user", userMessage);
         saveMessage("assistant", reply);
@@ -162,7 +170,7 @@ app.post("/chat", async (req, res) => {
                   resource: event,
                 });
                 return res.json({
-                  reply: `${reply}\n\n✅ Appointment scheduled: ${result.data.htmlLink}`,
+                  reply: `${reply}\n\n\u2705 Appointment scheduled: ${result.data.htmlLink}`,
                 });
               }
             }
@@ -173,7 +181,7 @@ app.post("/chat", async (req, res) => {
 
         res.json({ reply });
       } else {
-        res.json({ reply: "🤖 No response from NazborgAI." });
+        res.json({ reply: "\ud83e\udd16 No response from NazborgAI." });
       }
     } catch (err) {
       console.error("OpenAI error:", err);
@@ -222,5 +230,5 @@ app.post("/schedule", async (req, res) => {
 });
 
 app.listen(3001, () => {
-  console.log("✅ NazborgAI backend running on http://localhost:3001");
+  console.log("\u2705 NazborgAI backend running on http://localhost:3001");
 });
