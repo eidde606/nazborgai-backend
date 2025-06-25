@@ -182,7 +182,7 @@ app.post("/chat", async (req, res) => {
           resource: event,
         });
         return res.json({
-          reply: `${reply}\n\n✅ [Click here to open your fallback event](${result.data.htmlLink})`,
+          reply: `${reply}\n\n✅ [Click here to view appointment](${result.data.htmlLink})`,
         });
       }
 
